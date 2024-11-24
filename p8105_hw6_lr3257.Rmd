@@ -1,0 +1,194 @@
+---
+title: "p8105_hw6_lr3257"
+author: "Leonor Rui"
+date: "2024-11-23"
+output: github_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(modelr)
+set.seed(1)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+## Problem 1
+
+```{r, include=FALSE}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+```{r}
+boot_sample = function(df) {
+  
+  boot_df = sample_frac(df, replace = TRUE)
+  
+  return(boot_df)
+}
+```
+
+```{r}
+boot_straps = 
+  tibble(
+    strap_number = 1:5000
+  ) |>
+  mutate(
+    strap_sample = map(strap_number, \(i) boot_sample(df = weather_df)),
+    models = map(strap_sample, \(df) lm(tmax ~ tmin, data = df)),
+    results1 = map(models, broom::tidy),
+    r_squared = map(models, \(model) broom::glance(model) |> select(r.squared))
+  )
+
+bootstrap_results = 
+  boot_straps |>
+  select(strap_number, results1, r_squared) |>
+  unnest(c(results1, r_squared)) |>
+  group_by(strap_number) |>
+  summarise(
+    beta0 = estimate[term == "(Intercept)"],
+    beta1 = estimate[term == "tmin"],
+    r_squared = first(r.squared)
+  ) |>
+  mutate(
+    log_beta_product = log(beta0 * beta1))
+```
+
+```{r}
+bootstrap_results |>
+  ggplot(aes(x = r_squared)) +
+  geom_density() +
+  labs(
+    title = "Density Plot of r^2 for lm(tmax ~ tmin)"
+  )
+
+bootstrap_results |>
+  ggplot(aes(x = log_beta_product)) +
+  geom_density() +
+  labs(
+    title = "Density Plot of log(Beta0 * Beta1) for lm(tmax ~ tmin)"
+  )
+```
+
+Both the distributions of the estimates for r^2 and the estimates for log(Beta0 * Beta1) are normally distributed. The distribution of r^2 estimates has a center around 0.915 and the distribution of log(Beta0 * Beta1) estimates has a center around 2.02, meaning that such estimates occur the most often in all the models generated from the 5000 bootstrap samples. 
+
+```{r}
+ci_r2 = bootstrap_results |>
+  summarise(
+    lower = quantile(r_squared, probs = 0.025),
+    upper = quantile(r_squared, probs = 0.975)
+  )
+
+ci_beta_product =  bootstrap_results |>
+  summarise(
+    lower = quantile(log_beta_product, probs = 0.025),
+    upper = quantile(log_beta_product, probs = 0.975)
+  )
+
+ci_r2
+ci_beta_product
+```
+
+## Problem 2
+
+Import dataset & data cleaning
+
+```{r}
+homicide_df = read.csv("data/homicide-data.csv") |>
+  filter(victim_age != "Unknown",
+         victim_sex != "Unknown",
+         victim_race %in% c("White", "Black")) |>
+  mutate(
+    city_state = paste(city, state, sep = ", "),
+    solved = ifelse(disposition == "Closed by arrest", 1, 0),
+    victim_age = as.numeric(victim_age)) |>
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"))
+```
+
+Baltimore, MD: 
+
+```{r}
+baltimore_df = homicide_df |>
+  filter(city_state == "Baltimore, MD")
+
+baltimore_results = glm(solved ~ victim_age + victim_sex + victim_race, 
+                        data = baltimore_df, family = binomial)
+
+baltimore_results |>
+  broom::tidy()
+```
+
+```{r}
+baltimore_results |>
+  broom::tidy(conf.int = TRUE, exponentiate = TRUE) |>
+  filter(term == "victim_sexMale") |>
+  select(estimate, conf.low, conf.high)
+```
+
+All cities: 
+
+```{r}
+homicide_results = homicide_df |>
+  group_by(city_state) |>
+  nest() |>
+  mutate(
+    models = map(data, \(df) glm(solved ~ victim_age + victim_sex + victim_race, 
+                                data = df, family = binomial)),
+    results = map(models, \(x) broom::tidy(x, conf.int = TRUE, exponentiate = TRUE))
+  ) |>
+  unnest(results) |>
+  filter(term == "victim_sexMale") |>
+  select(city_state, term, estimate, conf.low, conf.high)
+
+homicide_results
+```
+
+Create a plot that shows the estimated ORs and CIs for each city. Organize cities according to estimated OR, and comment on the plot.
+
+```{r}
+homicide_results |>
+  ggplot(aes(x = fct_reorder(city_state, estimate), y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  labs(
+    title = "Estimated ORs and CIs for Solving Homicides Comparing Male to Female Victims",
+    x = "City_State",
+    y = "Estimated ORs"
+  )
+```
+
+The plot tells us that, for most cities in the dataset, homicides with male victims are less likely to be solved that those with female victims, with the exceptions of Richmond, Nashville, Fresco, Stockton, and Albuquerque. Out of all the cities, New York has the lowest estimated OR for solving homicides comparing male to female victim, and Albuquerque has the highest. This means that the odds of solving homicides for male victims are 0.262 times as high as the odds for female victims in New York, but 1.77 times as high as the odds for female victims in Albuquerque. 
+
+
+
+
+
+
+
