@@ -120,7 +120,7 @@ ci_beta_product
 Import dataset & data cleaning
 
 ```{r}
-homicide_df = read.csv("data/homicide-data.csv") |>
+homicide_df = read_csv("data/homicide-data.csv") |>
   filter(victim_age != "Unknown",
          victim_sex != "Unknown",
          victim_race %in% c("White", "Black")) |>
@@ -187,6 +187,108 @@ homicide_results |>
 The plot tells us that, for most cities in the dataset, homicides with male victims are less likely to be solved that those with female victims, with the exceptions of Richmond, Nashville, Fresco, Stockton, and Albuquerque. Out of all the cities, New York has the lowest estimated OR for solving homicides comparing male to female victim, and Albuquerque has the highest. This means that the odds of solving homicides for male victims are 0.262 times as high as the odds for female victims in New York, but 1.77 times as high as the odds for female victims in Albuquerque. 
 
 ## Problem 3
+
+Import dataset & data cleaning
+
+```{r}
+birthweight_df = read_csv("data/birthweight.csv") |>
+  mutate(babysex = as.factor(babysex),
+         frace = as.factor(frace),
+         malform = as.factor(malform),
+         mrace = as.factor(mrace)) 
+```
+
+Modeling process: 
+
+```{r}
+basic.mlr = lm(bwt ~ NULL, data = birthweight_df)
+
+step(basic.mlr, bwt ~ babysex + bhead + blength + delwt + fincome + frace + gaweeks + malform + menarche 
+     + mheight + momage + mrace + parity + pnumlbw + pnumsga + ppbmi + ppwt + smoken + wtgain, 
+     direction = "forward")
+```
+
+```{r}
+potential.mlr = lm(bwt ~ bhead + blength + mrace + delwt + gaweeks + 
+    smoken + ppbmi + babysex + parity + ppwt + fincome, data = birthweight_df)
+
+summary(potential.mlr)
+
+best.mlr = lm(bwt ~ bhead + blength + mrace + delwt + gaweeks + 
+    smoken + ppbmi + babysex + parity, data = birthweight_df)
+
+summary(best.mlr)
+```
+
+I used a forward stepping method to generate an appropriate regression model for birthweight, and the process us mainly data-driven. It starts with an empty model (basic.mlr), evaluates each potential predictor for its AIC, and adds the variable with the smallest AIC, which signifies the best model fit, into the regression model first. This process is repeated until no addition of variables will increase the model fit significantly (i.e., the AIC does not decrease significantly anymore). The resulted model has the following variables: bhead, blength, mrace, delwt, gaweeks, smoken, ppbmi, babysex, parity, ppwt, and fincome. After examining this model's results and p-values, I chose to omit 2 variables--ppwt and fincome, since their p-values are only marginally significant for predicting birthweight, and I want to keep the model as simple as possible. 
+
+Residual vs. Fitted plot
+
+```{r}
+birthweight_df = birthweight_df |>
+  add_predictions(best.mlr) |>
+  add_residuals(best.mlr)
+
+birthweight_df |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "Residual vs. Fitted Plot for Model Predicting Birthweight",
+    x = "Residuals", y = "Fitted Values"
+  )
+```
+
+Compare your model to two others:
+
+One using length at birth and gestational age as predictors (main effects only)
+One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+Make this comparison in terms of the cross-validated prediction error; use crossv_mc and functions in purrr as appropriate.
+
+```{r}
+main.mlr = lm(bwt ~ blength + gaweeks, data = birthweight_df) 
+
+interaction.mlr = lm(bwt ~ bhead + blength + babysex + bhead:blength + bhead:babysex + blength:babysex +
+                       bhead:blength:babysex, data = birthweight_df)
+```
+
+```{r}
+cv_df = 
+  crossv_mc(birthweight_df, 100) |>
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  ) |>
+  mutate(
+    my_mod = map(train, \(df) lm(bwt ~ bhead + blength + mrace + delwt + gaweeks + 
+    smoken + ppbmi + babysex + parity, data = df)),
+    main_mod = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    interaction_mod = map(train, \(df) lm(bwt ~ bhead + blength + babysex + bhead:blength + bhead:babysex + blength:babysex + bhead:blength:babysex, data = df))
+  ) |>
+  mutate(
+    rmse_my = map2_dbl(my_mod, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_main = map2_dbl(main_mod, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_interaction = map2_dbl(interaction_mod, test, \(mod, df) rmse(model = mod, data = df))
+  )
+```
+
+```{r}
+cv_df |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(), 
+    names_to = "model",
+    values_to = "rmse", 
+    names_prefix = "rmse_"
+  ) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin() +
+  labs(
+    title = "Violin Plots of RMSE Distributions for 3 Models"
+  )
+```
+
+As the violin plots show, the RMSE values for my chosen model are consistently smaller compared to those of the other two models, suggesting that my model performs better overall. Yet, while the disparation between my model and the main model is relatively obvious, that between my model and the interaction model seems less evident, and requires further statistical test to recognize significance. In general, my model has the largest power of predicting baby birth weights, followed by the interaction model, with the main model showing the least predictive power.
 
 
 
